@@ -1,0 +1,23 @@
+fileFormatVersion: 2
+guid: 42e54f2376c29d141a2a70053aae6aac
+MonoImporter:
+  externalObjects: {}
+  serializedVersion: 2
+  defaultReferences:
+  - XFShells: {fileID: 4800000, guid: 66683b1aa13fee54b914f6c62276c087, type: 3}
+  - GShells: {fileID: 4800000, guid: d08fc935ae25004438fb238f03222904, type: 3}
+  - Legacy8: {instanceID: 0}
+  - Legacy4: {instanceID: 0}
+  - XFURP: {instanceID: 0}
+  - XFHDRP: {instanceID: 0}
+  - XFShellsMaterial: {instanceID: 0}
+  - GShellsMaterial: {instanceID: 0}
+  - LegacyShellsEight: {instanceID: 0}
+  - LegacyShellsFour: {instanceID: 0}
+  - URPShells: {instanceID: 0}
+  - HDRPShells: {instanceID: 0}
+  executionOrder: 0
+  icon: {instanceID: 0}
+  userData: 
+  assetBundleName: 
+  assetBundleVariant: 

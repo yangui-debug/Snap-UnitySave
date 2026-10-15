@@ -1,0 +1,15 @@
+Idle 10 26
+Move 40 56
+Attack 80 95
+Victory 110 140
+Fail_1 160 170
+Fail 180 196
+
+Death 220  260
+Ready 270 288
+
+Walk 320 350
+Assemble 360 375
+Move_to_Assemble_Idle 430 455
+Assemble_Idle   390 420
+Assemble_Idle_Greeting 470 505

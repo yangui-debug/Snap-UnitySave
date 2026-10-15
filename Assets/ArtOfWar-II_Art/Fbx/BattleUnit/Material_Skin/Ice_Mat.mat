@@ -1,0 +1,67 @@
+%YAML 1.1
+%TAG !u! tag:unity3d.com,2011:
+--- !u!114 &-8422180484098550089
+MonoBehaviour:
+  m_ObjectHideFlags: 11
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 0}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: d0353a89b1f911e48b9e16bdc9f2e058, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: 
+  version: 10
+--- !u!21 &2100000
+Material:
+  serializedVersion: 8
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_Name: Ice_Mat
+  m_Shader: {fileID: 4800000, guid: 7451d1b75c54b9c498e51114b6febb4a, type: 3}
+  m_Parent: {fileID: 2100000, guid: 8eeb966033eb6bb4d96a601b00501a85, type: 2}
+  m_ModifiedSerializedProperties: 16
+  m_ValidKeywords:
+  - TCP2_MATCAP
+  - TCP2_RIM_LIGHTING
+  - TCP2_SPECULAR
+  - _CLIPPING
+  - _RECEIVE_SHADOWS_OFF
+  m_InvalidKeywords: []
+  m_LightmapFlags: 4
+  m_EnableInstancingVariants: 0
+  m_DoubleSidedGI: 0
+  m_CustomRenderQueue: 3000
+  stringTagMap: {}
+  disabledShaderPasses:
+  - MOTIONVECTORS
+  m_LockedProperties: 
+  m_SavedProperties:
+    serializedVersion: 3
+    m_TexEnvs:
+    - _MatCapTex:
+        m_Texture: {fileID: 2800000, guid: c636f879b6a27d54e9ec8755967c1889, type: 3}
+        m_Scale: {x: 1, y: 1}
+        m_Offset: {x: 0, y: 0}
+    m_Ints: []
+    m_Floats:
+    - _Clipping: 1
+    - _Cutoff: 1
+    - _ReceiveShadowsOff: 0
+    - _RimMaxVert: 0.774
+    - _RimMinVert: 0.416
+    - _ShadowFalloff: 1
+    - _SpecularToonSize: 0.031
+    - _SpecularToonSmoothness: 0.01
+    - _UseMatCap: 1
+    - _UseRim: 1
+    - _UseSpecular: 1
+    m_Colors:
+    - _BaseColor: {r: 0, g: 0, b: 0, a: 1}
+    - _HColor: {r: 0.5613208, g: 0.88341796, b: 1, a: 1}
+    - _RimColor: {r: 0.53333336, g: 0.9764437, b: 1, a: 0.5019608}
+  m_BuildTextureStacks: []
+  m_AllowLocking: 1

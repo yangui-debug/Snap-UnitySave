@@ -1,0 +1,13 @@
+fileFormatVersion: 2
+guid: 1476cddc69555204695a3790517b1acf
+MonoImporter:
+  externalObjects: {}
+  serializedVersion: 2
+  defaultReferences:
+  - pidiSkin2: {fileID: 11400000, guid: 28daee7028e1f19498bf3f55979d4ddf, type: 2}
+  - xfurInstance: {instanceID: 0}
+  executionOrder: 0
+  icon: {instanceID: 0}
+  userData: 
+  assetBundleName: 
+  assetBundleVariant: 
