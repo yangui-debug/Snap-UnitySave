@@ -20,17 +20,17 @@ public class HomingArrow : MonoBehaviour
     public float 最高点放大倍数 = 0.5f;
 
     [Header("弹道与索敌机制")]
-    [Tooltip("是否开启追踪模式。开启后，即使目标移动，箭矢落点也会实时更新跟随目标；关闭时只射向发射时的预判落点")]
+    [Tooltip("是否开启追踪模式。开启后，即使目标移动，箭矢落点也会实时更新跟随目标；关闭时只射向发射时的预判落点，并使用命中判定半径；开启追踪时不使用该半径，因此隐藏黄色线框")]
     public bool 是否追踪目标 = true;
 
-    [Tooltip("当关闭追踪模式时，判断箭矢是否命中目标的判定半径")]
+    [Tooltip("非追踪模式命中半径（世界单位）。选中箭矢且关闭追踪时显示黄色线框球；球心为目标当前位置加落点偏移，表示箭矢落点允许的三维误差。无目标时在箭矢原点预览。")]
     public float 命中判定半径 = 1.5f;
 
     [Header("范围伤害 (AoE) 设置")]
     [Tooltip("是否开启范围爆炸伤害。开启时会对落点周围的所有敌人造成伤害")]
     public bool 是否范围伤害 = false;
 
-    [Tooltip("范围伤害的爆炸波及半径")]
+    [Tooltip("范围伤害球形检测半径（世界单位）。选中箭矢且开启范围伤害时显示橙色线框球；以目标当前位置加落点偏移为中心，与伤害检测一致。无目标时在箭矢原点预览。")]
     public float 范围伤害半径 = 3.0f;
 
     [Header("命中表现设置")]
@@ -187,7 +187,7 @@ public class HomingArrow : MonoBehaviour
                     {
                         Vector3 受击击退方向 = (敌人生命.transform.position - 特效生成位置);
                         受击击退方向.y = 0; // 仅保留水平击退
-                        敌人生命.TakeDamage(伤害数值, 受击击退方向.normalized);
+                        敌人生命.TakeDamage(伤害数值, 受击击退方向.normalized, source: SoldierDamageSource.Ranged);
                     }
                 }
             }
@@ -199,7 +199,7 @@ public class HomingArrow : MonoBehaviour
                 {
                     Vector3 受击击退方向 = (目标.position - transform.position);
                     受击击退方向.y = 0;
-                    目标生命.TakeDamage(伤害数值, 受击击退方向.normalized);
+                    目标生命.TakeDamage(伤害数值, 受击击退方向.normalized, source: SoldierDamageSource.Ranged);
                 }
             }
 
@@ -241,5 +241,35 @@ public class HomingArrow : MonoBehaviour
         }
 
         Destroy(gameObject, 插箭停留时间);
+    }
+    /// <summary>
+    /// 选中且启用组件时，按实际功能开关绘制世界空间半径，不受模型缩放影响。
+    /// 黄色：非追踪模式的命中容差，以目标当前瞄准点为球心。
+    /// 橙色：成功命中后在目标当前瞄准点执行的球形范围伤害。
+    /// 尚未发射、没有目标时只在箭矢原点预览大小，不代表已经确定的落点。
+    /// 此回调只绘制辅助图形，不更改飞行、命中或伤害逻辑。
+    /// </summary>
+    void OnDrawGizmosSelected()
+    {
+        if (!isActiveAndEnabled) return;
+        Color previousColor = Gizmos.color;
+        Vector3 center = 目标 != null ? 目标.position + 落点偏移位置 : transform.position;
+        if (!是否追踪目标 && 命中判定半径 > 0f)
+        {
+            Gizmos.color = Color.yellow;
+            Gizmos.DrawWireSphere(center, 命中判定半径);
+#if UNITY_EDITOR
+            UnityEditor.Handles.Label(center + Vector3.up * 命中判定半径, "命中半径（黄色）：" + 命中判定半径 + " 单位");
+#endif
+        }
+        if (是否范围伤害 && 范围伤害半径 > 0f)
+        {
+            Gizmos.color = new Color(1f, 0.45f, 0f);
+            Gizmos.DrawWireSphere(center, 范围伤害半径);
+#if UNITY_EDITOR
+            UnityEditor.Handles.Label(center + Vector3.down * 范围伤害半径, "范围伤害（橙色）：" + 范围伤害半径 + " 单位");
+#endif
+        }
+        Gizmos.color = previousColor;
     }
 }

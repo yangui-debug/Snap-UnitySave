@@ -1,4 +1,4 @@
-using System.Collections;
+﻿using System.Collections;
 using System.Collections.Generic;
 using UnityEngine;
 using UnityEngine.AI;
@@ -14,6 +14,11 @@ public class SoldierAIMovement : MonoBehaviour
 
     private Rigidbody rb;           // 物理刚体，负责实际移动和防穿模
     private NavMeshAgent agent;     // 寻路组件，只负责算路径，不直接控制移动
+    // 仅右桥管理器会返回有效仲裁器；左桥、远程和其他场景完全沿用原移动流程。
+    private RightBridgeMeleeUnit bridgeCombat;
+    private SoldierHealth movementHealth;
+    // 新版红兵自主状态只返回速度；实际 Rigidbody 与 Agent 同步仍由本移动脚本统一负责。
+    private RedMeleeSelf redSelf;
 
     [Header("========== 移动与追逐参数 ==========")]
     [Tooltip("士兵随机移动速度的最小值。推荐：普通步兵填 5.0。")]
@@ -28,7 +33,7 @@ public class SoldierAIMovement : MonoBehaviour
     [Tooltip("过桥后的全局寻敌范围（以自己为圆心）。推荐 30~50，确保过桥后立刻能看见敌人，绝不原地发呆。")]
     public float searchRadius = 40.0f;
 
-    [Tooltip("停止移动的攻击距离。走到离敌人多近时停下来开始打。\n推荐：近战兵填 1.5 ~ 2.0，远程射手填 8 ~ 10。")]
+    [Tooltip("停止移动的基础攻击距离（世界单位）。近战推荐 1.5~2，远程推荐 8~10。攻击脚本的自然随机启用时叠加每人固定的前后偏移，并限制在攻击检测范围内；不改变桥路点或喷射物理。")]
     public float stopDistance = 1.8f;
 
     [Header("========== 桥路点与过桥设置 ==========")]
@@ -85,6 +90,7 @@ public class SoldierAIMovement : MonoBehaviour
         // 1. 获取组件
         rb = GetComponent<Rigidbody>();
         agent = GetComponent<NavMeshAgent>();
+        movementHealth = GetComponent<SoldierHealth>();
 
         // 2. 核心设置：让 NavMeshAgent 只算路径，不直接控制刚体位置和旋转（防穿模核心）
         agent.updatePosition = false;
@@ -160,6 +166,38 @@ public class SoldierAIMovement : MonoBehaviour
 
     void FixedUpdate()
     {
+        if (redSelf == null) redSelf = GetComponent<RedMeleeSelf>();
+        // 死亡高于所有移动；击退/僵直先于寻路更新，避免 Agent.Warp 抵消击退。
+        if (redSelf != null && movementHealth != null && movementHealth.isDead)
+        { rb.velocity = Vector3.up * rb.velocity.y; return; }
+        if (movementHealth != null && movementHealth.OriginalHitMovementActive)
+        {
+            // 原 SoldierHealth 是此时唯一的击退位移写入者；AI 暂停 Warp、路径更新及主动速度。
+            // 保留重力和寻路位置同步，结束后按当前目标重算，不能恢复受击前的过期追逐方向。
+            if (redSelf != null) redSelf.FilterVelocity(Vector3.zero, animationController != null ? animationController.CurrentTarget : null);
+            rb.velocity = Vector3.up * rb.velocity.y;
+            if (agent.enabled && agent.isOnNavMesh) agent.nextPosition = transform.position;
+            return;
+        }
+        if (bridgeCombat == null) bridgeCombat = GetComponent<RightBridgeMeleeUnit>();
+        if (bridgeCombat == null || bridgeCombat.Director == null || bridgeCombat.Controller == null)
+            bridgeCombat = RightBridgeMeleeDirector.FindOrAttach(animationController);
+        if (bridgeCombat != null && movementHealth != null && movementHealth.isDead)
+        {
+            rb.velocity = new Vector3(0f, rb.velocity.y, 0f);
+            return;
+        }
+        // 盾兵的单兵推进由仲裁器执行；不让原自由寻路再写同一个 Rigidbody。
+        if (bridgeCombat != null && bridgeCombat.Controlled && bridgeCombat.IsShield) return;
+        if (bridgeCombat != null && bridgeCombat.HitMovementActive)
+        {
+            // 击退期间连寻路路径更新也暂时让位；恢复后下一物理帧重新按当前目标算路径。
+            Vector3 hitVelocity = bridgeCombat.FilterVelocity(Vector3.zero, targetEnemy);
+            hitVelocity.y += rb.velocity.y;
+            rb.velocity = hitVelocity;
+            if (agent.enabled && agent.isOnNavMesh) agent.nextPosition = transform.position;
+            return;
+        }
         // 安全检查：如果 Agent 不在 NavMesh 上，安全拉回
         if (!agent.isOnNavMesh)
         {
@@ -370,7 +408,12 @@ public class SoldierAIMovement : MonoBehaviour
 
         // 1. 判断是否已到达攻击距离内
         bool reachAttackRange = false;
-        if (targetEnemy != null && 水平距离(transform.position, targetEnemy.position) <= stopDistance)
+        // 只改变战斗接近时的停止半径，保留原来的 Rigidbody、NavMesh 与避障流程。
+        // 每个角色偏移固定，避免每帧随机导致前后抽搐；上限保证士兵不会停在自身射程之外。
+        float effectiveStopDistance = stopDistance;
+        if (animationController != null && animationController.NaturalAttackRandomnessActive)
+            effectiveStopDistance = Mathf.Clamp(stopDistance + animationController.GetAttackStandingOffset(), 0.05f, Mathf.Max(0.05f, animationController.enemyDetectRange));
+        if (targetEnemy != null && 水平距离(transform.position, targetEnemy.position) <= effectiveStopDistance)
         {
             reachAttackRange = true;
         }
@@ -398,6 +441,12 @@ public class SoldierAIMovement : MonoBehaviour
 
         // 4. 速度叠加并赋给 Rigidbody，保持物理重力与碰撞
         Vector3 finalVelocity = aiMoveVelocity + ejectVelocity;
+        // 保留本帧原寻路/过桥/喷射计算，仅在指定右桥单位上仲裁最终速度。
+        // 受击时由同一 Rigidbody 写入者执行击退，避免受击协程同时写 Transform。
+        if (redSelf != null && redSelf.Controlled)
+            finalVelocity = redSelf.FilterVelocity(finalVelocity, targetEnemy);
+        else if (bridgeCombat != null && bridgeCombat.Controlled)
+            finalVelocity = bridgeCombat.FilterVelocity(finalVelocity, targetEnemy);
         finalVelocity.y = rb.velocity.y;
         rb.velocity = finalVelocity;
 

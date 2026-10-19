@@ -1,8 +1,11 @@
-using UnityEngine;
+﻿using UnityEngine;
 using UnityEngine.UI;
 using UnityEngine.Playables;
 using System.Collections;
 using System.Collections.Generic; // 引入泛型集合（用于字典缓存材质）
+
+/// <summary>由伤害发起端显式传入；旧调用默认未指定，不根据受击者装备推断伤害来源。</summary>
+public enum SoldierDamageSource { Unspecified, Melee, Ranged }
 
 [ExecuteAlways]
 public class SoldierHealth : MonoBehaviour
@@ -38,7 +41,7 @@ public class SoldierHealth : MonoBehaviour
     [Tooltip("死亡时要永久销毁的当前士兵根节点。SoldierHealth 挂在预制体最外层时推荐留空；若脚本在子节点，才拖入这一名士兵自己的最外层根节点。绝对不要拖入包含多名士兵的公共编队父节点。")]
     public Transform 独立士兵根节点;
 
-    [Tooltip("击退的距离有多远。选中物体时，场景里会有一条橙色的线显示这个距离！")]
+    [Tooltip("本兵非致命受击的击退距离，近战与远程共用。修改生成器实际引用的原始红补兵后，随后 Instantiate 出的新克隆体继承该值；已生成者不追溯覆盖。实际位移由本 SoldierHealth 执行，受后方真实空间与碰撞限制。选中时橙色线显示配置距离。")]
     public float 击退距离 = 2.0f;
     [Tooltip("击退过程花费的时间。越短感觉越重！推荐 0.1 到 0.2")]
     public float 击退时长 = 0.15f;
@@ -189,6 +192,10 @@ public class SoldierHealth : MonoBehaviour
 
     // 缓存最开始的材质，防止材质丢失
     private Dictionary<Renderer, Material[]> originalMaterials = new Dictionary<Renderer, Material[]>();
+    // 每个士兵独享临时材质列表。GetSharedMaterials/SetSharedMaterials 复用容量，
+    // 避免白模闪烁每帧为每个 Renderer 创建两份 Material[]。
+    // 每次仍读取当前材质槽数量，保留运行时更换模型/材质槽的支持；不实例化材质。
+    private readonly List<Material> whiteMaterialScratch = new List<Material>();
     // ==============================================================
 
     [Header("死亡替身设置")]
@@ -220,6 +227,13 @@ public class SoldierHealth : MonoBehaviour
     private bool hasWarnedUnsafeKnockbackTarget = false;
 
     private Coroutine hitReactionCoroutine;
+    // 红兵原受击协程拥有击退位移；移动脚本只读状态并让路。
+    // 唯一距离入口是本组件“击退距离”，近战和远程共用，不另存一套参数。
+    private float originalHitUntil, originalKnockbackUntil;
+    private MeleeBodyMotor originalHitCollisionCache;
+    private Transform originalHitCollisionRoot;
+    public bool OriginalHitMovementActive => isActiveAndEnabled && !isDead && Time.time < originalHitUntil;
+    public bool OriginalKnockbackActive => OriginalHitMovementActive && Time.time < originalKnockbackUntil;
     private Transform activeScaleTarget;
     private Vector3 scaleTargetOriginalLocalScale = Vector3.one;
     private Vector3 currentScaleMultiplier = Vector3.one;
@@ -261,6 +275,10 @@ public class SoldierHealth : MonoBehaviour
 
     void OnDisable()
     {
+        // 禁用组件本身不会自动停止 Unity 协程。只终止本次原红兵击退，防止 AI 恢复后旧协程仍移动同一节点。
+        if (originalHitUntil > 0f && hitReactionCoroutine != null)
+        { StopCoroutine(hitReactionCoroutine); hitReactionCoroutine = null; }
+        originalHitUntil = originalKnockbackUntil = 0f;
         ReleaseTimelinePause();
         RestoreScaleImmediately();
 
@@ -301,7 +319,17 @@ public class SoldierHealth : MonoBehaviour
         }
     }
 
+    /// <summary>
+    /// 统一伤害入口。前三个参数保持兼容；source 只决定右桥接入单位的闪白配置，
+    /// 不改变伤害、暴击文字、击退距离、缩放、死亡或加速闪红。
+    /// </summary>
     public void TakeDamage(int damage, Vector3 hitDirection, bool isCritical = false)
+    {
+        TakeDamage(damage, hitDirection, SoldierDamageSource.Unspecified, isCritical);
+    }
+
+    /// <summary>显式伤害来源的新重载；保留原三参数方法签名供既有调用使用。</summary>
+    public void TakeDamage(int damage, Vector3 hitDirection, SoldierDamageSource source, bool isCritical = false)
     {
         if (isDead) return;
 
@@ -364,7 +392,7 @@ public class SoldierHealth : MonoBehaviour
                 acceleratingFlashCoroutine = StartCoroutine(AcceleratingRedFlashRoutine());
             }
 
-            hitReactionCoroutine = StartCoroutine(HitReactionRoutine(hitDirection));
+            hitReactionCoroutine = StartCoroutine(HitReactionRoutine(hitDirection, source));
         }
     }
 
@@ -398,19 +426,68 @@ public class SoldierHealth : MonoBehaviour
         }
     }
 
-    private IEnumerator HitReactionRoutine(Vector3 hitDir)
+    private IEnumerator HitReactionRoutine(Vector3 hitDir, SoldierDamageSource source)
     {
         float timer = 0f;
         float safeKnockbackDuration = Mathf.Max(0.01f, 击退时长);
         float knockbackSpeed = 击退距离 / safeKnockbackDuration;
         Transform targetToMove = GetKnockbackTarget();
+        // 红兵击退回归本生命脚本，独立交战组件只保留等候/补位及既有来源闪白。
+        var redSelf = GetComponent<RedMeleeSelf>();
+        bool originalRedHit = redSelf != null && redSelf.Controlled;
+        var blueSelf = GetComponent<BlueShieldMember>();
+        bool localKnockback = blueSelf != null && blueSelf.BeginHit(hitDir, 击退距离, 击退时长, 僵直停顿时间, 击退轴向控制);
+        // 保留旧入口以兼容未切换的旧对象；本场景旧管理器已经停用。
+        var bridgeUnit = GetComponent<RightBridgeMeleeUnit>();
+        if (bridgeUnit == null)
+            bridgeUnit = RightBridgeMeleeDirector.FindOrAttach(GetComponent<SoldierAnimationController>());
+        bool managedKnockback = localKnockback || !originalRedHit && bridgeUnit != null && bridgeUnit.BeginHit(hitDir, 击退距离, 击退时长, 僵直停顿时间, 击退轴向控制);
+        MeleeBodyMotor originalHitCollision = null;
+        Rigidbody originalHitBody = null;
+        if (originalRedHit)
+        {
+            bool moves = Mathf.Abs(击退距离) > .000001f && Vector3.Scale(hitDir.normalized, 击退轴向控制).sqrMagnitude > .001f;
+            originalKnockbackUntil = Time.time + (moves ? safeKnockbackDuration : 0f);
+            originalHitUntil = Time.time + Mathf.Max(moves ? safeKnockbackDuration : 0f, Mathf.Max(0f, 僵直停顿时间));
+            Collider collider = targetToMove.GetComponent<Collider>();
+            if (collider == null || !collider.enabled) collider = GetComponent<Collider>();
+            if (originalHitCollisionCache == null || originalHitCollisionRoot != targetToMove)
+            {
+                originalHitCollisionRoot = targetToMove;
+                originalHitCollisionCache = new MeleeBodyMotor(targetToMove, collider, redSelf.settings.minimumRadius, redSelf.settings.skin, redSelf.settings.layers);
+            }
+            else originalHitCollisionCache.UpdateSettings(redSelf.settings.minimumRadius, redSelf.settings.skin, redSelf.settings.layers);
+            originalHitCollision = originalHitCollisionCache;
+            originalHitBody = targetToMove.GetComponent<Rigidbody>();
+            if (originalHitBody != null && !originalHitBody.isKinematic) originalHitBody.velocity = Vector3.up * originalHitBody.velocity.y;
+        }
+
+        // 来源分离仅覆盖右桥常规闪白；未指定来源和独立加速闪红沿用旧设置。
+        float sourceFlashDuration = 闪烁时长;
+        float sourceFlashMultiplier = 1f;
+        if (bridgeUnit != null && bridgeUnit.Controlled && source != SoldierDamageSource.Unspecified &&
+            闪烁模式 != HitVisualMode.AcceleratingRedFlash)
+        {
+            var settings = bridgeUnit.Director;
+            bool melee = source == SoldierDamageSource.Melee;
+            bool enabled = melee ? settings.enableMeleeFlash : settings.enableRangedFlash;
+            if (!enabled) { sourceFlashDuration = 0f; sourceFlashMultiplier = 0f; }
+            else if (melee) { sourceFlashDuration = settings.meleeFlashDuration; sourceFlashMultiplier = settings.meleeFlashMultiplier; }
+            else if (!settings.preserveOriginalRangedFlash)
+            { sourceFlashDuration = settings.rangedFlashDuration; sourceFlashMultiplier = settings.rangedFlashMultiplier; }
+        }
+
+        // 近战/远程判断使用攻击调用传入的枚举，不通过红兵持有什么武器推断。
+        if (redSelf != null && 闪烁模式 != HitVisualMode.AcceleratingRedFlash)
+            redSelf.Flash(source, ref sourceFlashDuration, ref sourceFlashMultiplier);
 
         if (动画控制器 != null && !string.IsNullOrEmpty(受击动画状态名))
         {
             动画控制器.CrossFade(受击动画状态名, 0.1f, 0, 0f);
         }
         // ApplyStun 仍发送给单兵逻辑根节点；击退位移节点可以只是一个纯视觉/偏移子节点。
-        GetSafeSoldierRoot().SendMessage("ApplyStun", 僵直停顿时间, SendMessageOptions.DontRequireReceiver);
+        if (!managedKnockback)
+            GetSafeSoldierRoot().SendMessage("ApplyStun", 僵直停顿时间, SendMessageOptions.DontRequireReceiver);
 
         AcquireTimelinePause();
         BeginScaleReaction();
@@ -425,11 +502,12 @@ public class SoldierHealth : MonoBehaviour
         // 加速闪红模式下，受击视觉不再由“闪烁时长”决定，所以这里把它当 0 处理，
         // 免得受击协程被一个和视觉无关的数值拖长。
         float effectiveFlashDuration =
-            (闪烁模式 == HitVisualMode.AcceleratingRedFlash) ? 0f : 闪烁时长;
+            (闪烁模式 == HitVisualMode.AcceleratingRedFlash) ? 0f : sourceFlashDuration;
 
         float totalDuration = Mathf.Max(
             Mathf.Max(击退时长, effectiveFlashDuration),
             Mathf.Max(scaleTotalDuration, timelinePauseDuration));
+        if (originalRedHit) totalDuration = Mathf.Max(totalDuration, Mathf.Max(safeKnockbackDuration, 僵直停顿时间));
 
         // 计算受轴向控制的击退方向
         Vector3 controlledDir = new Vector3(
@@ -441,9 +519,20 @@ public class SoldierHealth : MonoBehaviour
         while (timer < totalDuration)
         {
             float deltaTime = Time.deltaTime;
+            float previousTimer = timer;
             timer += deltaTime;
 
-            if (timer < safeKnockbackDuration)
+            if (originalRedHit && previousTimer < safeKnockbackDuration && controlledDir.sqrMagnitude > .001f)
+            {
+                // 本生命脚本按原距离/时长执行击退。尾帧只走剩余时间，避免低帧率或时长短于一帧时不后退。
+                // 空间不足时碰撞安全截短，绝不通过穿过后排补足距离。
+                float moveTime = Mathf.Max(0f, Mathf.Min(timer, safeKnockbackDuration) - previousTimer);
+                Vector3 step = controlledDir.normalized * (knockbackSpeed * moveTime);
+                step = originalHitCollision.SafeVelocity(step / Time.fixedDeltaTime) * Time.fixedDeltaTime;
+                if (originalHitBody != null && !originalHitBody.isKinematic) originalHitBody.position += step;
+                else targetToMove.position += step;
+            }
+            else if (!originalRedHit && !managedKnockback && timer < safeKnockbackDuration)
             {
                 // 只有在方向向量不为0时才移动，避免全0导致规范化报错
                 if (controlledDir.sqrMagnitude > 0.001f)
@@ -456,9 +545,9 @@ public class SoldierHealth : MonoBehaviour
             //    这里直接跳过，避免两套逻辑抢同一个 MaterialPropertyBlock。 ——
             if (闪烁模式 != HitVisualMode.AcceleratingRedFlash)
             {
-                float flashProgress = Mathf.Clamp01(timer / Mathf.Max(0.01f, 闪烁时长));
-                float effectStrength = 1f - flashProgress;
-                ApplyHitVisuals(effectStrength);
+                float flashProgress = Mathf.Clamp01(timer / Mathf.Max(0.01f, sourceFlashDuration));
+                float effectStrength = sourceFlashDuration > 0f ? 1f - flashProgress : 0f;
+                ApplyHitVisuals(effectStrength, sourceFlashMultiplier);
             }
 
             if (启用受击缩放)
@@ -482,6 +571,7 @@ public class SoldierHealth : MonoBehaviour
 
         RestoreScaleImmediately();
         ReleaseTimelinePause();
+        if (originalRedHit) originalHitUntil = originalKnockbackUntil = 0f;
         hitReactionCoroutine = null;
     }
 
@@ -713,14 +803,14 @@ public class SoldierHealth : MonoBehaviour
     }
 
     // ================== 核心视觉表现切分逻辑 ==================
-    private void ApplyHitVisuals(float strength)
+    private void ApplyHitVisuals(float strength, float emissionMultiplier = 1f)
     {
         if (modelRenderers == null) return;
 
         if (闪烁模式 == HitVisualMode.EmissionFlash)
         {
             RestoreOriginalMaterials(); // 确保从白模模式切回来时恢复正常
-            ApplyEmissionToRenderers(flashColor, emissionIntensity, strength);
+            ApplyEmissionToRenderers(flashColor, emissionIntensity * emissionMultiplier, strength);
         }
         else if (闪烁模式 == HitVisualMode.AcceleratingRedFlash)
         {
@@ -736,22 +826,21 @@ public class SoldierHealth : MonoBehaviour
 
             foreach (var rend in modelRenderers)
             {
-                if (rend == null || !originalMaterials.ContainsKey(rend)) continue;
+                if (rend == null || !originalMaterials.TryGetValue(rend, out Material[] savedMaterials)) continue;
 
                 if (shouldBeWhite && whiteUnlitMaterial != null)
                 {
-                    // 替换成纯白材质 (如果模型有多个子材质，全部替换)
-                    Material[] whiteMats = new Material[rend.sharedMaterials.Length];
-                    for (int i = 0; i < whiteMats.Length; i++) whiteMats[i] = whiteUnlitMaterial;
-                    rend.sharedMaterials = whiteMats;
+                    // 保持原来的逐帧写入时机和全部材质槽替换效果，仅复用托管容器。
+                    rend.GetSharedMaterials(whiteMaterialScratch);
+                    for (int i = 0; i < whiteMaterialScratch.Count; i++) whiteMaterialScratch[i] = whiteUnlitMaterial;
+                    rend.SetSharedMaterials(whiteMaterialScratch);
+                    whiteMaterialScratch.Clear(); // 保留容量，但不额外持有本次材质引用。
                 }
                 else
                 {
-                    // 恢复原始材质
-                    if (rend.sharedMaterials != originalMaterials[rend])
-                    {
-                        rend.sharedMaterials = originalMaterials[rend];
-                    }
+                    // sharedMaterials 的 getter 每次返回新的数组，原先按数组引用比较始终不同。
+                    // 直接执行原来必然执行的恢复，去掉无效比较和临时数组，保留逐帧恢复行为。
+                    rend.sharedMaterials = savedMaterials;
                 }
             }
         }
@@ -802,12 +891,11 @@ public class SoldierHealth : MonoBehaviour
         if (modelRenderers == null) return;
         foreach (var rend in modelRenderers)
         {
-            if (rend != null && originalMaterials.ContainsKey(rend))
+            if (rend != null && originalMaterials.TryGetValue(rend, out Material[] savedMaterials))
             {
-                if (rend.sharedMaterials != originalMaterials[rend])
-                {
-                    rend.sharedMaterials = originalMaterials[rend];
-                }
+                // 原比较检查的是新数组的引用，不能判断材质是否相同。
+                // 保持原本每次恢复的语义，避免所有闪白/闪红角色逐帧分配材质数组。
+                rend.sharedMaterials = savedMaterials;
             }
         }
     }

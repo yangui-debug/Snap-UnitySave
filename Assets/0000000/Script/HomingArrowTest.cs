@@ -25,13 +25,15 @@ public class HomingArrowTest : MonoBehaviour
     public Vector3 aimOffset = new Vector3(0, 1.2f, 0);
 
     [Header("弹道与索敌机制")]
-    [Tooltip("是否开启实时追踪")]
+    [Tooltip("是否开启实时追踪。开启时直接按追踪命中处理，不使用 hitRadius，因此不显示黄色命中半径。关闭时使用半径判定。")]
     public bool isHoming = true;
-    [Tooltip("非追踪模式下的命中判定半径")]
+    [Tooltip("非追踪模式下的命中判定半径（世界单位）。落点到目标当前位置加 aimOffset 的三维距离不超过此值才命中。选中箭矢且关闭追踪时显示黄色线框球，以目标当前瞄准点为球心；无目标时在箭矢位置预览。")]
     public float hitRadius = 1.5f;
 
     [Header("范围伤害 (AoE) 设置")]
+    [Tooltip("开启范围伤害：成功命中后在目标位置加 aimOffset 处执行球形范围伤害检测。仅开启时显示橙色范围线框；关闭时保持原单体伤害。")]
     public bool isAoE = false;
+    [Tooltip("范围伤害球形检测半径（世界单位）。选中箭矢并开启 isAoE 时显示橙色线框球；运行时以目标当前瞄准点为中心，无目标时以箭矢位置预览。此图仅辅助查看，不修改伤害判定。")]
     public float aoeRadius = 3.0f;
 
     [Header("命中后表现")]
@@ -207,6 +209,37 @@ public class HomingArrowTest : MonoBehaviour
         transform.position = currentPos;
     }
 
+    /// <summary>
+    /// 仅在选中本箭矢且组件启用时绘制实际参与判定的半径。
+    /// 两个检测均使用世界空间三维球形距离，不乘箭矢模型缩放。
+    /// 命中球围绕目标当前瞄准点，表示非追踪箭矢落点允许的误差；
+    /// AoE 球同样围绕目标当前瞄准点，与 HitTarget 的 effectSpawnPosition 一致。
+    /// 编辑预制体或目标为空时没有可知命中位置，故只在箭矢原点预览尺寸。
+    /// </summary>
+    void OnDrawGizmosSelected()
+    {
+        if (!isActiveAndEnabled) return;
+        Color previousColor = Gizmos.color;
+        Vector3 center = target != null ? target.position + aimOffset : transform.position;
+        if (!isHoming && hitRadius > 0f)
+        {
+            Gizmos.color = Color.yellow;
+            Gizmos.DrawWireSphere(center, hitRadius);
+#if UNITY_EDITOR
+            UnityEditor.Handles.Label(center + Vector3.up * hitRadius, "命中半径（黄色）：" + hitRadius + " 单位");
+#endif
+        }
+        if (isAoE && aoeRadius > 0f)
+        {
+            Gizmos.color = new Color(1f, 0.45f, 0f);
+            Gizmos.DrawWireSphere(center, aoeRadius);
+#if UNITY_EDITOR
+            UnityEditor.Handles.Label(center + Vector3.down * aoeRadius, "范围伤害（橙色）：" + aoeRadius + " 单位");
+#endif
+        }
+        Gizmos.color = previousColor;
+    }
+
     void HitTarget(bool isTargetAlive)
     {
         hasHit = true;
@@ -236,7 +269,7 @@ public class HomingArrowTest : MonoBehaviour
                     {
                         Vector3 hitDirection = (health.transform.position - effectSpawnPosition);
                         hitDirection.y = 0;
-                        health.TakeDamage(incomingDamage, hitDirection.normalized);
+                        health.TakeDamage(incomingDamage, hitDirection.normalized, source: SoldierDamageSource.Ranged);
                     }
                 }
             }
@@ -247,7 +280,7 @@ public class HomingArrowTest : MonoBehaviour
                 {
                     Vector3 hitDirection = (target.position - transform.position);
                     hitDirection.y = 0;
-                    health.TakeDamage(incomingDamage, hitDirection.normalized);
+                    health.TakeDamage(incomingDamage, hitDirection.normalized, source: SoldierDamageSource.Ranged);
                 }
             }
 

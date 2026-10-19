@@ -1,4 +1,4 @@
-using UnityEngine;
+﻿using UnityEngine;
 using System.Collections;
 
 // ==================== 枚举定义 (全部中文) ====================
@@ -178,6 +178,9 @@ public class SoldierSpawner : MonoBehaviour
         // ================== 2. 给新生成的士兵分配最近的桥 ==================
         if (newSoldier != null)
         {
+            // 可选的红方兵营接入：只复制单兵配置，不改变生成随机数、数量、路线与喷射。
+            var redSetup = GetComponent<RedMeleeSpawnSetup>();
+            if (redSetup != null) redSetup.Install(newSoldier);
             SoldierAIMovement ai = newSoldier.GetComponent<SoldierAIMovement>();
 
             // 防御性检查：确保路点数组存在且长度大于 0，否则不分配，让士兵直接索敌
